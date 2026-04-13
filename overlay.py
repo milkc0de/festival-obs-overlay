@@ -263,7 +263,7 @@ def run_overlay(settings):
                 rect = (x, 25, OD_LW, SCR_H - 50)
 
             c = tuple(lane["color"]) if pressed else tuple(data["off_color"])
-            pygame.draw.rect(screen, color, rect, border_radius=6)
+            pygame.draw.rect(screen, c, rect, border_radius=6)
             if pressed: pygame.draw.rect(screen, (255, 255, 255), rect, 2, border_radius=6)
 
         pygame.display.flip()
