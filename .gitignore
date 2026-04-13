@@ -1,0 +1,9 @@
+# User-specific config
+overlay_config.json
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+
+# OS artifacts
+.DS_Store
