@@ -1,4 +1,4 @@
-# Festival Overlay Pro
+# Festival Overlay OBS
 A customizable, low-latency input overlay for rhythm games (optimized for Fortnite Festival).
 
 ## Features
