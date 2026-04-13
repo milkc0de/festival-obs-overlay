@@ -34,6 +34,7 @@ class OverlaySettings:
             "bg_color": [255, 0, 255], 
             "off_color": [20, 20, 20],
             "sound_path": "click.wav",
+            "mute": False, # New: Mute toggle flag
             "fps": 144,
             "trigger_threshold": 0.5
         }
@@ -85,14 +86,19 @@ def open_settings(settings):
             sound_var.set(os.path.basename(path))
             settings.data["sound_path"] = path
 
-    tk.Label(g_frame, text="Sound FX:", bg=BG_DARK, fg=FG_WHITE).grid(row=0, column=0, sticky="w")
-    tk.Entry(g_frame, textvariable=sound_var, width=20, state="readonly").grid(row=0, column=1, padx=5)
+    tk.Label(g_frame, text="Sound:", bg=BG_DARK, fg=FG_WHITE).grid(row=0, column=0, sticky="w")
+    tk.Entry(g_frame, textvariable=sound_var, width=15, state="readonly").grid(row=0, column=1, padx=5)
     tk.Button(g_frame, text="Browse", command=select_file).grid(row=0, column=2)
 
+    # Mute Checkbox (New)
+    mute_var = tk.BooleanVar(value=settings.data.get("mute", False))
+    tk.Checkbutton(g_frame, text="Mute", variable=mute_var, bg=BG_DARK, fg=FG_WHITE, 
+                   selectcolor=BG_DARK, activebackground=BG_DARK, activeforeground=ACCENT).grid(row=0, column=3, padx=10)
+
     # Performance
-    tk.Label(g_frame, text="FPS Target:", bg=BG_DARK, fg=FG_WHITE).grid(row=0, column=3, padx=(15, 0))
+    tk.Label(g_frame, text="FPS:", bg=BG_DARK, fg=FG_WHITE).grid(row=0, column=4, padx=(10, 0))
     fps_var = tk.StringVar(value=str(settings.data.get("fps", 144)))
-    tk.Entry(g_frame, textvariable=fps_var, width=5).grid(row=0, column=4, padx=5)
+    tk.Entry(g_frame, textvariable=fps_var, width=5).grid(row=0, column=5, padx=5)
 
     def pick_g_color(key):
         c = colorchooser.askcolor(initialcolor='#%02x%02x%02x' % tuple(settings.data[key]))
@@ -113,12 +119,11 @@ def open_settings(settings):
         old_val = target_var.get()
         target_var.set("RECORDING...")
         root.update()
-        time.sleep(0.3) # Prevent click bleed-through
+        time.sleep(0.3)
         
         captured = False
         while not captured:
             if not is_pad:
-                # Keyboard Recording
                 def on_key(event):
                     nonlocal captured
                     kn = event.keysym.lower()
@@ -127,27 +132,23 @@ def open_settings(settings):
                     captured = True
                 root.bind("<Key>", on_key); root.wait_variable(target_var); root.unbind("<Key>")
             else:
-                # Pad Recording (XInput Polling)
                 state = XInput.get_state(0)
                 btns = XInput.get_button_values(state)
                 trigs = XInput.get_trigger_values(state)
-                # Check buttons
                 for b_name, pressed in btns.items():
                     if pressed:
                         settings.data["lanes"][lane_idx]["type"] = "pad_button"
                         settings.data["lanes"][lane_idx]["id"] = b_name
                         target_var.set(b_name); captured = True; break
-                # Check triggers
                 if not captured:
-                    if trigs[0] > 0.7: # LT
+                    if trigs[0] > 0.7:
                         settings.data["lanes"][lane_idx]["type"] = "pad_trigger"; settings.data["lanes"][lane_idx]["id"] = 0
                         target_var.set("LT"); captured = True
-                    elif trigs[1] > 0.7: # RT
+                    elif trigs[1] > 0.7:
                         settings.data["lanes"][lane_idx]["type"] = "pad_trigger"; settings.data["lanes"][lane_idx]["id"] = 1
                         target_var.set("RT"); captured = True
             
-            if is_key_pressed_win32("escape"): # Hardware ESC cancel
-                target_var.set(old_val); captured = True
+            if is_key_pressed_win32("escape"): target_var.set(old_val); captured = True
             root.update()
             if captured: break
 
@@ -155,18 +156,12 @@ def open_settings(settings):
     for i, lane in enumerate(settings.data["lanes"]):
         row = i + 1
         tk.Label(l_frame, text=lane['label'], bg=BG_DARK, fg=ACCENT, width=10).grid(row=row, column=0, pady=5)
-        
-        # Keyboard setting
         kv = tk.StringVar(value=lane.get('key', ''))
         tk.Button(l_frame, textvariable=kv, width=8, command=lambda v=kv, idx=i: record_input(v, idx)).grid(row=row, column=1, padx=5)
-        
-        # Pad setting
         pv_label = str(lane.get('id', 'None'))
         if lane.get('type') == 'pad_trigger': pv_label = "LT" if lane.get('id') == 0 else "RT"
         pv = tk.StringVar(value=pv_label)
         tk.Button(l_frame, textvariable=pv, width=12, command=lambda v=pv, idx=i: record_input(v, idx, True)).grid(row=row, column=2, padx=5)
-        
-        # Color setting
         def pick_l_color(idx=i):
             c = colorchooser.askcolor(initialcolor='#%02x%02x%02x' % tuple(settings.data["lanes"][idx]["color"]))
             if c[1]: settings.data["lanes"][idx]["color"] = [int(c[1][j:j+2], 16) for j in (1, 3, 5)]
@@ -176,6 +171,7 @@ def open_settings(settings):
     def on_launch():
         try: settings.data["fps"] = int(fps_var.get())
         except: settings.data["fps"] = 144
+        settings.data["mute"] = mute_var.get() # Save mute state
         for i, k in enumerate(lane_vars): settings.data["lanes"][i]["key"] = k.get()
         settings.save(); root.destroy()
 
@@ -196,7 +192,6 @@ def run_overlay(settings):
         sound = pygame.mixer.Sound(data["sound_path"])
         sound.set_volume(0.6)
 
-    # Final Layout Params
     LW, OD_LW, GAP = 165, 90, 100
     screen = pygame.display.set_mode((1200, 100))
     pygame.display.set_caption("Festival Overlay")
@@ -207,7 +202,7 @@ def run_overlay(settings):
         screen.fill(tuple(data["bg_color"]))
         if any(e.type == pygame.QUIT for e in pygame.event.get()): break
 
-        # Native XInput Polling (Doesn't care about window focus)
+        # Native XInput Polling
         state = XInput.get_state(0)
         pad_buttons = XInput.get_button_values(state)
         pad_triggers = XInput.get_trigger_values(state)
@@ -224,15 +219,13 @@ def run_overlay(settings):
                 if lane.get("type") == "pad_button":
                     if pad_buttons.get(lane.get("id"), False): pressed = True
                 elif lane.get("type") == "pad_trigger":
-                    # Triggers in XInput are naturally 0.0 to 1.0
                     if pad_triggers[lane.get("id")] > 0.2: pressed = True
 
-            # Play sound on edge detection
-            if pressed and not prev_states[i] and sound:
+            # SFX Trigger (Modified with Mute check)
+            if pressed and not prev_states[i] and sound and not data.get("mute", False):
                 sound.play()
             prev_states[i] = pressed
 
-            # Calculate screen positioning
             x = (50 + i * (LW + 15)) if i < 5 else (50 + 5 * (LW + 15) + GAP)
             rect = (x, 25, (LW if i < 5 else OD_LW), 50)
             c = tuple(lane["color"]) if pressed else tuple(data["off_color"])
