@@ -6,36 +6,36 @@ from tkinter import colorchooser, filedialog
 import pygame
 import time
 
-# Windows-specific optimization
-IS_WINDOWS = sys.platform == "win32"
-if IS_WINDOWS:
-    import ctypes
-    # Improve timer resolution for low-latency
-    ctypes.windll.winmm.timeBeginPeriod(1)
+# Windows-specific libraries for background polling
+import ctypes
+import XInput 
 
-# --- Configuration Management ---
+# Set high timer resolution for low latency
+ctypes.windll.winmm.timeBeginPeriod(1)
+
 CONFIG_FILE = "overlay_config.json"
 
 class OverlaySettings:
+    """Handles persistent user configuration."""
     def __init__(self):
         self.load()
 
     def load(self):
-        # Default Layout: 5 Lanes + 1 Overdrive
-        # Defaults optimized for Windows controller mappings
+        # Default layout: 5 lanes + 1 OD
         default_config = {
             "lanes": [
-                {"label": "Lane 1", "color": [0, 255, 120], "key": "d", "input_type": "button", "input_id": 13}, 
-                {"label": "Lane 2", "color": [0, 255, 120], "key": "f", "input_type": "button", "input_id": 14}, 
-                {"label": "Lane 3", "color": [0, 255, 120], "key": "j", "input_type": "button", "input_id": 2},  
-                {"label": "Lane 4", "color": [0, 255, 120], "key": "k", "input_type": "button", "input_id": 3},  
-                {"label": "Lane 5", "color": [0, 255, 120], "key": "l", "input_type": "button", "input_id": 1},  
-                {"label": "OD",     "color": [255, 255, 0], "key": "space", "input_type": "axis", "input_id": 5} 
+                {"label": "Lane 1", "color": [0, 255, 120], "key": "d", "type": "pad_button", "id": "DPAD_LEFT"}, 
+                {"label": "Lane 2", "color": [0, 255, 120], "key": "f", "type": "pad_button", "id": "DPAD_RIGHT"}, 
+                {"label": "Lane 3", "color": [0, 255, 120], "key": "j", "type": "pad_button", "id": "X"},  
+                {"label": "Lane 4", "color": [0, 255, 120], "key": "k", "type": "pad_button", "id": "Y"},  
+                {"label": "Lane 5", "color": [0, 255, 120], "key": "l", "type": "pad_button", "id": "B"},  
+                {"label": "OD",     "color": [255, 255, 0], "key": "space", "type": "pad_trigger", "id": 1} # 1 = RT
             ],
             "bg_color": [255, 0, 255], 
             "off_color": [20, 20, 20],
             "sound_path": "click.wav",
-            "fps": 144
+            "fps": 144,
+            "trigger_threshold": 0.5
         }
         
         if os.path.exists(CONFIG_FILE):
@@ -51,17 +51,15 @@ class OverlaySettings:
         with open(CONFIG_FILE, "w") as f:
             json.dump(self.data, f, indent=4)
 
-# --- Background Input Helper (Windows) ---
+# --- Background Keyboard Helper ---
 def is_key_pressed_win32(key_name):
-    """Checks keyboard state globally on Windows using GetAsyncKeyState."""
-    if not IS_WINDOWS: return False
+    """Checks keyboard state globally via Windows API (Always works in background)."""
     VK_MAP = {
         "d": 0x44, "f": 0x46, "j": 0x4A, "k": 0x4B, "l": 0x4C,
         "space": 0x20, "escape": 0x1B
     }
     vk = VK_MAP.get(key_name.lower())
     if vk:
-        # Check high-order bit for "currently pressed"
         return (ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000) != 0
     return False
 
@@ -69,16 +67,16 @@ def is_key_pressed_win32(key_name):
 def open_settings(settings):
     root = tk.Tk()
     root.title("Festival Overlay Config")
-    root.geometry("640x600")
+    root.geometry("620x600")
     
     BG_DARK = "#121212"; FG_WHITE = "#ffffff"; ACCENT = "#00ff78"
     root.configure(bg=BG_DARK)
 
-    # Global Settings Area
+    # Global Frame
     g_frame = tk.LabelFrame(root, text="Global Settings", bg=BG_DARK, fg=FG_WHITE, padx=15, pady=10)
     g_frame.pack(fill="x", padx=20, pady=10)
 
-    # Sound setup
+    # Sound path
     sound_var = tk.StringVar(value=os.path.basename(settings.data.get("sound_path", "click.wav")))
     def select_file():
         path = filedialog.askopenfilename(filetypes=[("WAV files", "*.wav")])
@@ -86,55 +84,29 @@ def open_settings(settings):
             sound_var.set(os.path.basename(path))
             settings.data["sound_path"] = path
 
-    tk.Label(g_frame, text="Sound:", bg=BG_DARK, fg=FG_WHITE).grid(row=0, column=0, sticky="w")
+    tk.Label(g_frame, text="Sound:", bg=BG_DARK, fg=FG_WHITE).grid(row=0, column=0)
     tk.Entry(g_frame, textvariable=sound_var, width=15, state="readonly").grid(row=0, column=1, padx=5)
     tk.Button(g_frame, text="Browse", command=select_file).grid(row=0, column=2)
 
-    # FPS setting
-    tk.Label(g_frame, text="FPS:", bg=BG_DARK, fg=FG_WHITE).grid(row=0, column=3, padx=(15, 0))
+    # FPS
+    tk.Label(g_frame, text="FPS:", bg=BG_DARK, fg=FG_WHITE).grid(row=0, column=3, padx=(15,0))
     fps_var = tk.StringVar(value=str(settings.data.get("fps", 144)))
-    tk.Entry(g_frame, textvariable=fps_var, width=5).grid(row=0, column=4, padx=5)
+    tk.Entry(g_frame, textvariable=fps_var, width=5).grid(row=0, column=4)
 
-    def pick_g_color(key):
-        c = colorchooser.askcolor(initialcolor='#%02x%02x%02x' % tuple(settings.data[key]))
-        if c[1]: settings.data[key] = [int(c[1][j:j+2], 16) for j in (1, 3, 5)]
-
-    tk.Button(g_frame, text="Screen BG", command=lambda: pick_g_color("bg_color")).grid(row=1, column=0, pady=10)
-    tk.Button(g_frame, text="Notes Off", command=lambda: pick_g_color("off_color")).grid(row=1, column=1, pady=10)
-
-    # Lane Bindings Area
-    l_frame = tk.LabelFrame(root, text="Input Bindings (ESC to cancel)", bg=BG_DARK, fg=FG_WHITE, padx=15, pady=10)
+    # Lane Bindings
+    l_frame = tk.LabelFrame(root, text="Input Bindings (Click and Press Hardware)", bg=BG_DARK, fg=FG_WHITE, padx=15, pady=10)
     l_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
-    headers = ["Lane", "Keyboard", "Controller", "Color"]
-    for i, txt in enumerate(headers):
-        tk.Label(l_frame, text=txt, font=("Arial", 9, "bold"), bg=BG_DARK, fg="#666666").grid(row=0, column=i, sticky="ew")
-
-    pygame.init()
-    if hasattr(pygame, 'joystick'):
-        pygame.joystick.init()
-        joy = pygame.joystick.Joystick(0) if pygame.joystick.get_count() > 0 else None
-        if joy: joy.init()
-
-    lane_vars = []
-
+    # Note: Recording buttons/axes via XInput polling
     def record_input(target_var, lane_idx, is_pad=False):
         old_val = target_var.get()
-        target_var.set("CALIBRATING...")
-        root.update()
-        
-        pygame.event.pump()
-        # Capture current baseline to filter ghosting/triggers
-        ref_axes = [joy.get_axis(i) for i in range(joy.get_numaxes())] if (is_pad and joy) else []
-        
-        time.sleep(0.3)
         target_var.set("REC...")
         root.update()
-
+        time.sleep(0.3)
         captured = False
         while not captured:
-            pygame.event.pump()
             if not is_pad:
+                # Keyboard record (Tkinter event)
                 def on_key(event):
                     nonlocal captured
                     kn = event.keysym.lower()
@@ -143,86 +115,67 @@ def open_settings(settings):
                     captured = True
                 root.bind("<Key>", on_key); root.wait_variable(target_var); root.unbind("<Key>")
             else:
-                if joy:
-                    # Check Buttons
-                    for b in range(joy.get_numbuttons()):
-                        if joy.get_button(b):
-                            settings.data["lanes"][lane_idx]["input_type"] = "button"
-                            settings.data["lanes"][lane_idx]["input_id"] = b
-                            target_var.set(f"Btn {b}"); captured = True; break
-                    # Check Hats (D-pad)
-                    if not captured:
-                        for h in range(joy.get_numhats()):
-                            if joy.get_hat(h) != (0, 0):
-                                settings.data["lanes"][lane_idx]["input_type"] = "hat"
-                                settings.data["lanes"][lane_idx]["input_id"] = h
-                                settings.data["lanes"][lane_idx]["hat_val"] = joy.get_hat(h)
-                                target_var.set(f"Hat {joy.get_hat(h)}"); captured = True; break
-                    # Check Axes (Triggers) - Ignore drift by comparing with ref
-                    if not captured:
-                        for a in range(joy.get_numaxes()):
-                            if abs(joy.get_axis(a) - ref_axes[a]) > 0.6:
-                                settings.data["lanes"][lane_idx]["input_type"] = "axis"
-                                settings.data["lanes"][lane_idx]["input_id"] = a
-                                target_var.set(f"Axis {a}"); captured = True; break
-                
-                def on_esc(event):
-                    nonlocal captured
-                    if event.keysym.lower() == "escape": target_var.set(old_val); captured = True
-                root.bind("<Key>", on_esc); root.update()
-                if captured: root.unbind("<Key>")
+                # Pad record (XInput poll)
+                state = XInput.get_state(0)
+                btns = XInput.get_button_values(state)
+                trigs = XInput.get_trigger_values(state)
+                for b_name, pressed in btns.items():
+                    if pressed:
+                        settings.data["lanes"][lane_idx]["type"] = "pad_button"
+                        settings.data["lanes"][lane_idx]["id"] = b_name
+                        target_var.set(b_name); captured = True; break
+                if not captured:
+                    if trigs[0] > 0.7: # LT
+                        settings.data["lanes"][lane_idx]["type"] = "pad_trigger"; settings.data["lanes"][lane_idx]["id"] = 0
+                        target_var.set("LT"); captured = True
+                    elif trigs[1] > 0.7: # RT
+                        settings.data["lanes"][lane_idx]["type"] = "pad_trigger"; settings.data["lanes"][lane_idx]["id"] = 1
+                        target_var.set("RT"); captured = True
+            
+            # Allow ESC to cancel pad recording
+            if is_key_pressed_win32("escape"): target_var.set(old_val); captured = True
+            root.update()
             if captured: break
 
+    lane_vars = []
     for i, lane in enumerate(settings.data["lanes"]):
         row = i + 1
         tk.Label(l_frame, text=lane['label'], bg=BG_DARK, fg=ACCENT, width=10).grid(row=row, column=0, pady=5)
+        
         kv = tk.StringVar(value=lane.get('key', ''))
         tk.Button(l_frame, textvariable=kv, width=8, command=lambda v=kv, idx=i: record_input(v, idx)).grid(row=row, column=1, padx=5)
         
-        initial_pad = f"{lane.get('input_type', 'button')} {lane.get('input_id', 0)}"
-        if lane.get('input_type') == 'hat': initial_pad = f"Hat {lane.get('hat_val')}"
-        bv = tk.StringVar(value=initial_pad)
-        tk.Button(l_frame, textvariable=bv, width=10, command=lambda v=bv, idx=i: record_input(v, idx, True)).grid(row=row, column=2, padx=5)
+        pv_label = str(lane.get('id', 'None'))
+        if lane.get('type') == 'pad_trigger': pv_label = "LT" if lane.get('id') == 0 else "RT"
+        pv = tk.StringVar(value=pv_label)
+        tk.Button(l_frame, textvariable=pv, width=12, command=lambda v=pv, idx=i: record_input(v, idx, True)).grid(row=row, column=2, padx=5)
         
         def pick_l_color(idx=i):
             c = colorchooser.askcolor(initialcolor='#%02x%02x%02x' % tuple(settings.data["lanes"][idx]["color"]))
             if c[1]: settings.data["lanes"][idx]["color"] = [int(c[1][j:j+2], 16) for j in (1, 3, 5)]
-        tk.Button(l_frame, text="Color", command=pick_l_color, width=8).grid(row=row, column=3, padx=5)
-        lane_vars.append((kv, bv))
+        tk.Button(l_frame, text="Color", command=pick_l_color).grid(row=row, column=3, padx=5)
+        lane_vars.append(kv)
 
     def on_launch():
         try: settings.data["fps"] = int(fps_var.get())
         except: settings.data["fps"] = 144
-        for i, (k, b) in enumerate(lane_vars): settings.data["lanes"][i]["key"] = k.get()
+        for i, k in enumerate(lane_vars): settings.data["lanes"][i]["key"] = k.get()
         settings.save(); root.destroy()
 
-    tk.Button(root, text="SAVE & LAUNCH OVERLAY", command=on_launch, bg=ACCENT, fg="black", font=("Arial", 11, "bold")).pack(pady=20)
+    tk.Button(root, text="SAVE & LAUNCH", command=on_launch, bg=ACCENT, font=("Arial", 11, "bold")).pack(pady=20)
     root.mainloop()
 
-# --- Main Application Logic ---
+# --- Main Overlay Logic ---
 def run_overlay(settings):
-    # CRITICAL: Allow background joystick events
-    os.environ["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = "1"
     pygame.init()
     data = settings.data
     
-    # Audio setup with error handling
-    has_audio = False
-    if hasattr(pygame, 'mixer'):
-        try:
-            pygame.mixer.init()
-            if os.path.exists(data.get("sound_path", "click.wav")):
-                sound = pygame.mixer.Sound(data["sound_path"]); has_audio = True
-        except: pass
-
-    # Joystick setup with neutral calibration
-    joystick, neutral_axes = None, []
-    if hasattr(pygame, 'joystick'):
-        pygame.joystick.init()
-        if pygame.joystick.get_count() > 0:
-            joystick = pygame.joystick.Joystick(0); joystick.init()
-            pygame.event.pump()
-            neutral_axes = [joystick.get_axis(i) for i in range(joystick.get_numaxes())]
+    # Low-latency Audio
+    os.environ['SDL_AUDIODRIVER'] = 'dsound'
+    pygame.mixer.init()
+    sound = None
+    if os.path.exists(data.get("sound_path", "click.wav")):
+        sound = pygame.mixer.Sound(data["sound_path"])
 
     screen = pygame.display.set_mode((1200, 100))
     pygame.display.set_caption("Overlay")
@@ -232,47 +185,35 @@ def run_overlay(settings):
     LW, OD_LW, GAP = 165, 90, 100
 
     while True:
-        # Essential for updating joystick state
-        pygame.event.pump()
-        
         screen.fill(tuple(data["bg_color"]))
         if any(e.type == pygame.QUIT for e in pygame.event.get()): break
 
+        # XInput Background Polling
+        state = XInput.get_state(0)
+        pad_buttons = XInput.get_button_values(state)
+        pad_triggers = XInput.get_trigger_values(state)
+
         for i, lane in enumerate(data["lanes"]):
             pressed = False
-            kn = lane.get("key", "")
             
-            # 1. Background Keyboard Detection (Windows)
-            if IS_WINDOWS:
-                if is_key_pressed_win32(kn): pressed = True
-            else:
-                # Standard Pygame keyboard (Only works if focused)
-                keys = pygame.key.get_pressed()
-                try:
-                    tk_key = pygame.K_SPACE if kn == "space" else pygame.key.key_code(kn)
-                    if keys[tk_key]: pressed = True
-                except: pass
+            # 1. Background Keyboard (Windows API)
+            if is_key_pressed_win32(lane.get("key", "")):
+                pressed = True
             
-            # 2. Joystick Detection (Works in BG via SDL settings)
-            if joystick:
-                i_type = lane.get("input_type", "button")
-                i_id = lane.get("input_id", 0)
-                try:
-                    if i_type == "button":
-                        if joystick.get_button(i_id): pressed = True
-                    elif i_type == "axis":
-                        # Compare against startup neutral value to solve "Trigger stuck" issue
-                        if abs(joystick.get_axis(i_id) - neutral_axes[i_id]) > 0.5: pressed = True
-                    elif i_type == "hat":
-                        if joystick.get_hat(i_id) == tuple(lane.get("hat_val", (0, 0))): pressed = True
-                except: pass
+            # 2. Background Pad (XInput Polling)
+            if not pressed:
+                if lane.get("type") == "pad_button":
+                    if pad_buttons.get(lane.get("id"), False): pressed = True
+                elif lane.get("type") == "pad_trigger":
+                    if pad_triggers[lane.get("id")] > data.get("trigger_threshold", 0.5): pressed = True
 
-            if pressed and not prev_states[i] and has_audio: sound.play()
+            # SFX Trigger
+            if pressed and not prev_states[i] and sound: sound.play()
             prev_states[i] = pressed
 
-            # Draw layout
+            # Drawing
             x = (50 + i * (LW + 15)) if i < 5 else (50 + 5 * (LW + 15) + GAP)
-            rect = (x, 20, (LW if i < 5 else OD_LW), 60)
+            rect = (x, 25, (LW if i < 5 else OD_LW), 50)
             c = tuple(lane["color"]) if pressed else tuple(data["off_color"])
             pygame.draw.rect(screen, c, rect, border_radius=6)
             if pressed: pygame.draw.rect(screen, (255, 255, 255), rect, 2, border_radius=6)
@@ -282,4 +223,6 @@ def run_overlay(settings):
     pygame.quit()
 
 if __name__ == "__main__":
-    s = OverlaySettings(); open_settings(s); run_overlay(s)
+    overlay_settings = OverlaySettings()
+    open_settings(overlay_settings)
+    run_overlay(overlay_settings)
